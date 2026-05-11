@@ -15,27 +15,50 @@ Rules:
 - When the user asks you to do something, use a tool — don't just describe what you would do.
 - Confirm completed actions briefly: "Done — added milk to your tasks."
 - Don't ask clarifying questions for simple requests. Pick a sensible default and proceed.
+- The user may follow up across multiple turns. Keep context — don't re-ask things they already told you.
 - If something fails, say so in one sentence."""
 
 MAX_TURNS = 8
+# Cap stored history (excluding system msg) to keep token usage bounded.
+MAX_HISTORY_MESSAGES = 40
 
 
-async def run_agent(transcript: str) -> str:
-    messages: list[dict[str, Any]] = [
-        {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "user", "content": transcript},
-    ]
+def _trim_history(history: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    if len(history) <= MAX_HISTORY_MESSAGES + 1:  # +1 for system
+        return history
+    system = [m for m in history[:1] if m.get("role") == "system"]
+    tail = history[-MAX_HISTORY_MESSAGES:]
+    # Avoid starting tail on an orphan tool message (no matching tool_calls upstream)
+    while tail and tail[0].get("role") == "tool":
+        tail = tail[1:]
+    return system + tail
+
+
+async def run_agent(
+    transcript: str,
+    history: list[dict[str, Any]] | None = None,
+) -> tuple[str, list[dict[str, Any]]]:
+    if history:
+        messages: list[dict[str, Any]] = list(history)
+        if not any(m.get("role") == "system" for m in messages):
+            messages.insert(0, {"role": "system", "content": SYSTEM_PROMPT})
+    else:
+        messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+    messages.append({"role": "user", "content": transcript})
+
     model = settings.fast_model
+    final_reply = ""
 
     for turn in range(MAX_TURNS):
-        log.info("agent turn=%d model=%s", turn, model)
+        log.info("agent turn=%d model=%s msgs=%d", turn, model, len(messages))
         response = await chat_completion(model=model, messages=messages, tools=TOOL_SCHEMAS)
         msg = response["choices"][0]["message"]
         messages.append(msg)
 
         tool_calls = msg.get("tool_calls") or []
         if not tool_calls:
-            return msg.get("content") or ""
+            final_reply = msg.get("content") or ""
+            break
 
         for call in tool_calls:
             name = call["function"]["name"]
@@ -63,5 +86,8 @@ async def run_agent(transcript: str) -> str:
                 "tool_call_id": call["id"],
                 "content": str(result),
             })
+    else:
+        final_reply = "Sorry, I got stuck. Try rephrasing."
+        messages.append({"role": "assistant", "content": final_reply})
 
-    return "Sorry, I got stuck. Try rephrasing."
+    return final_reply, _trim_history(messages)

@@ -1,15 +1,15 @@
 import logging
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import Depends, FastAPI, Header, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from .agent import run_agent
 from .config import settings
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 
-app = FastAPI(title="Assistant Backend", version="0.1.0")
+app = FastAPI(title="Assistant Backend", version="0.2.0")
 
 
 async def require_api_key(
@@ -24,10 +24,12 @@ async def require_api_key(
 
 class AgentRequest(BaseModel):
     transcript: str
+    history: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class AgentResponse(BaseModel):
     reply: str
+    history: list[dict[str, Any]]
 
 
 @app.get("/")
@@ -40,5 +42,5 @@ async def agent_endpoint(req: AgentRequest) -> AgentResponse:
     transcript = req.transcript.strip()
     if not transcript:
         raise HTTPException(status_code=400, detail="empty transcript")
-    reply = await run_agent(transcript)
-    return AgentResponse(reply=reply)
+    reply, history = await run_agent(transcript, req.history or None)
+    return AgentResponse(reply=reply, history=history)
