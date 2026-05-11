@@ -13,11 +13,15 @@ __pycache__/
 # OS
 .DS_Store
 
+# Claude Code local state
+.claude/
+
 # Android
 android/.gradle/
 android/.kotlin/
 android/build/
 android/app/build/
 android/local.properties
+android/.idea/
 android/captures/
 android/app/release/

@@ -82,6 +82,7 @@ class MainActivity : AppCompatActivity() {
                         .toRequestBody("application/json".toMediaType())
                     val req = Request.Builder()
                         .url("${BuildConfig.BACKEND_URL}/agent")
+                        .header("X-API-Key", BuildConfig.API_KEY)
                         .post(body)
                         .build()
                     http.newCall(req).execute().use { resp ->

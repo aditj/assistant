@@ -1,7 +1,20 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
 }
+
+val localProps = Properties().apply {
+    val f = rootProject.file("local.properties")
+    if (f.exists()) f.inputStream().use { load(it) }
+}
+
+fun secret(key: String): String =
+    localProps.getProperty(key)
+        ?: (project.findProperty(key) as? String)
+        ?: System.getenv(key)
+        ?: ""
 
 android {
     namespace = "com.aditjain.assistant"
@@ -16,6 +29,7 @@ android {
 
         val backendUrl = (project.findProperty("BACKEND_URL") as String?) ?: "http://10.0.2.2:8000"
         buildConfigField("String", "BACKEND_URL", "\"$backendUrl\"")
+        buildConfigField("String", "API_KEY", "\"${secret("ASSISTANT_API_KEY")}\"")
     }
 
     buildFeatures {

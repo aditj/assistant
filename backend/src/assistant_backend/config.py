@@ -16,6 +16,9 @@ class Settings(BaseSettings):
     google_client_secret: str = ""
     google_refresh_token: str = ""
 
+    # Shared-secret auth. If empty, the /agent endpoint is open (dev only).
+    assistant_api_key: str = ""
+
     port: int = 8000
 
 
