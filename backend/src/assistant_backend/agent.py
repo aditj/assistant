@@ -40,6 +40,10 @@ def _build_system_prompt(
               " \"work list\") to one of these names exactly and pass it as list_name."
               " If they don't mention a list, omit list_name."
         )
+
+    # Always declare notification capability so the model never confabulates
+    # "I don't have access" when the array is simply empty.
+    base += "\n\nNotification access: you CAN see the user's recent phone notifications."
     if notifications:
         lines = []
         for n in notifications[:MAX_NOTIFICATIONS_IN_PROMPT]:
@@ -49,10 +53,16 @@ def _build_system_prompt(
             body = " — ".join(p for p in (title, text) if p) or "(no body)"
             lines.append(f"- [{app}] {body}")
         base += (
-            "\n\nRecent notifications on the user's phone (most recent first):\n"
+            f" Right now there are {len(notifications)} cached (most recent first):\n"
             + "\n".join(lines)
             + "\n\nIf the user asks about notifications, messages, or what's new,"
               " summarize from this list. Don't bring them up unprompted."
+        )
+    else:
+        base += (
+            " Right now the cache is empty (no recent notifications captured)."
+            " If the user asks, say \"You have no recent notifications.\" — do NOT"
+            " say you can't see them."
         )
     return base
 

@@ -2,10 +2,12 @@ package com.aditjain.assistant
 
 import android.Manifest
 import android.content.ActivityNotFoundException
+import android.content.ComponentName
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Bundle
 import android.provider.Settings
+import android.service.notification.NotificationListenerService
 import android.widget.Button
 import android.widget.EditText
 import android.widget.TextView
@@ -54,6 +56,15 @@ class MainActivity : AppCompatActivity() {
             != PackageManager.PERMISSION_GRANTED
         ) {
             micLauncher.launch(Manifest.permission.RECORD_AUDIO)
+        }
+
+        // Each installDebug invalidates our NotificationListenerService binding.
+        // If the user has already granted access, asking the system to rebind
+        // restores it without forcing them back to Settings.
+        runCatching {
+            NotificationListenerService.requestRebind(
+                ComponentName(this, AssistantNotificationListener::class.java)
+            )
         }
 
         findViewById<Button>(R.id.setDefaultButton).setOnClickListener { openAssistantPicker() }
