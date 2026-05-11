@@ -25,16 +25,25 @@ class AssistantNotificationListener : NotificationListenerService() {
 
         val app = friendlyAppName(sbn.packageName)
 
+        // Capture a free-form-text reply action if the notification exposes one.
+        // This is how messaging apps (WhatsApp, Telegram, Messages, etc.) let
+        // Android Auto / Wear send silent replies on the user's behalf.
+        val replyAction = n.actions?.firstOrNull { a ->
+            a?.remoteInputs?.any { it.allowFreeFormInput } == true
+        }
+
         NotificationStore.add(
             NotificationStore.Item(
                 key = sbn.key,
                 app = app,
+                packageName = sbn.packageName,
                 title = title,
                 text = text,
                 timestamp = sbn.postTime,
+                replyAction = replyAction,
             )
         )
-        Log.d(TAG, "captured [$app] $title — ${text.take(60)}")
+        Log.d(TAG, "captured [$app] $title — ${text.take(60)}  reply=${replyAction != null}")
     }
 
     override fun onNotificationRemoved(sbn: StatusBarNotification?) {

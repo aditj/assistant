@@ -1,5 +1,7 @@
 package com.aditjain.assistant
 
+import android.app.Notification
+import android.app.RemoteInput
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
@@ -249,9 +251,61 @@ class AssistantSession(context: Context) : VoiceInteractionSession(context) {
             val a = actions.optJSONObject(i) ?: continue
             when (a.optString("type")) {
                 "call" -> handleCallAction(a.optString("name"))
+                "whatsapp_send" -> handleWhatsappSend(
+                    a.optString("contact"),
+                    a.optString("text"),
+                )
                 else -> Log.w(TAG, "unknown action type=${a.optString("type")}")
             }
         }
+    }
+
+    private fun handleWhatsappSend(contact: String, text: String) {
+        // Path 1: silent reply via the cached notification's RemoteInput action.
+        val target = NotificationStore.findReplyTarget("com.whatsapp", contact)
+            ?: NotificationStore.findReplyTarget("com.whatsapp.w4b", contact)
+        if (target?.replyAction != null) {
+            try {
+                fireRemoteInputReply(target.replyAction, text)
+                Log.i(TAG, "WhatsApp quick-reply sent to ${target.title}")
+                hide()
+                return
+            } catch (e: Exception) {
+                Log.w(TAG, "quick-reply failed, falling back to deep link", e)
+            }
+        }
+        // Path 2: deep link with text pre-filled; user taps send in WhatsApp.
+        val match = Contacts.findPhone(context, contact)
+        if (match == null) {
+            speak("I couldn't find $contact in your contacts.")
+            return
+        }
+        val digits = match.number.filter { it.isDigit() }
+        val url = "https://wa.me/$digits?text=${Uri.encode(text)}"
+        val baseIntent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        // Try regular WhatsApp first, then Business, then any handler.
+        for (pkg in listOf("com.whatsapp", "com.whatsapp.w4b", null)) {
+            val intent = Intent(baseIntent).apply { setPackage(pkg) }
+            try {
+                context.startActivity(intent)
+                hide()
+                return
+            } catch (_: Exception) { /* try next */ }
+        }
+        Log.e(TAG, "no WhatsApp variant available")
+        speak("WhatsApp doesn't seem to be installed.")
+    }
+
+    private fun fireRemoteInputReply(action: Notification.Action, text: String) {
+        val remoteInputs = action.remoteInputs
+            ?: throw IllegalStateException("action has no RemoteInput")
+        val intent = Intent()
+        val bundle = Bundle().apply {
+            for (ri in remoteInputs) putCharSequence(ri.resultKey, text)
+        }
+        RemoteInput.addResultsToIntent(remoteInputs, intent, bundle)
+        action.actionIntent.send(context, 0, intent)
     }
 
     private fun handleCallAction(name: String) {

@@ -91,6 +91,38 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "send_whatsapp",
+            "description": (
+                "Send a WhatsApp message to one of the user's contacts. Use whenever "
+                "the user says things like \"text X on WhatsApp\", \"WhatsApp X saying "
+                "...\", \"reply to X on WhatsApp\", or follow-ups to a notification you "
+                "just summarized. Two delivery paths handled by the phone:\n"
+                "  - If a recent WhatsApp notification from this contact is still in "
+                "    the cache, the message is sent silently via the notification's "
+                "    quick-reply action.\n"
+                "  - Otherwise WhatsApp opens with the text pre-filled and the user "
+                "    must tap send (Android doesn't allow fully silent third-party "
+                "    sending). Mention this in your reply so they know to tap."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "contact": {
+                        "type": "string",
+                        "description": "Contact name as the user said it — the phone fuzzy-matches.",
+                    },
+                    "text": {
+                        "type": "string",
+                        "description": "Message body, exactly as dictated by the user.",
+                    },
+                },
+                "required": ["contact", "text"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "escalate_to_smart_model",
             "description": (
                 "Hand the conversation off to a smarter, slower model. "
@@ -129,6 +161,11 @@ async def _call_contact(name: str) -> str:
     return f"OK, dialing {name} now."
 
 
+async def _send_whatsapp(contact: str, text: str) -> str:
+    actions.queue({"type": "whatsapp_send", "contact": contact, "text": text})
+    return f"OK, queued WhatsApp to {contact}: {text!r}"
+
+
 async def _escalate(reason: str) -> str:
     return ESCALATE_SENTINEL
 
@@ -137,5 +174,6 @@ TOOL_DISPATCH: dict[str, ToolFn] = {
     "add_google_task": _add_google_task,
     "create_google_task_list": _create_google_task_list,
     "call_contact": _call_contact,
+    "send_whatsapp": _send_whatsapp,
     "escalate_to_smart_model": _escalate,
 }
