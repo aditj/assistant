@@ -1,0 +1,22 @@
+services:
+  - type: web
+    name: assistant-backend
+    runtime: python
+    region: oregon
+    plan: starter
+    rootDir: backend
+    buildCommand: pip install uv && uv sync --frozen --no-dev
+    startCommand: uv run uvicorn assistant_backend.main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: OPENROUTER_API_KEY
+        sync: false
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
+      - key: GOOGLE_REFRESH_TOKEN
+        sync: false
+      - key: FAST_MODEL
+        value: anthropic/claude-haiku-4-5
+      - key: SMART_MODEL
+        value: anthropic/claude-opus-4-7
