@@ -12,7 +12,7 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
         "function": {
             "name": "add_google_task",
             "description": (
-                "Add a task to the user's Google Tasks default list. "
+                "Add a task to one of the user's Google Tasks lists. "
                 "Use this whenever the user wants to remember, capture, or add a todo."
             ),
             "parameters": {
@@ -20,11 +20,19 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                 "properties": {
                     "title": {
                         "type": "string",
-                        "description": "What to do — keep it short and imperative.",
+                        "description": "What to do — short and imperative.",
                     },
                     "notes": {
                         "type": "string",
                         "description": "Optional extra details.",
+                    },
+                    "list_name": {
+                        "type": "string",
+                        "description": (
+                            "Name of the target list (case-insensitive). Match to "
+                            "the available lists provided in the system prompt. "
+                            "Omit to use the user's default list."
+                        ),
                     },
                 },
                 "required": ["title"],
@@ -52,9 +60,14 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
 ]
 
 
-async def _add_google_task(title: str, notes: str | None = None) -> str:
-    result = await google_tasks.add_task(title, notes)
-    return f"OK, added '{result['title']}' to your tasks."
+async def _add_google_task(
+    title: str,
+    notes: str | None = None,
+    list_name: str | None = None,
+) -> str:
+    result = await google_tasks.add_task(title, notes, list_name)
+    where = f" to {list_name}" if list_name else ""
+    return f"OK, added '{result['title']}'{where}."
 
 
 async def _escalate(reason: str) -> str:
