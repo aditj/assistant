@@ -79,3 +79,14 @@ async def list_task_lists() -> list[str]:
     """Return the user's Google Tasks list titles."""
     items = await asyncio.to_thread(_refresh_list_cache_sync)
     return [tl["title"] for tl in items]
+
+
+def _create_list_sync(name: str) -> dict[str, Any]:
+    result = _service().tasklists().insert(body={"title": name}).execute()
+    # Pre-populate the cache so an immediate add-to-this-list call resolves locally.
+    _list_cache[name.lower().strip()] = (result["id"], time.time() + _LIST_CACHE_TTL)
+    return result
+
+
+async def create_task_list(name: str) -> dict[str, Any]:
+    return await asyncio.to_thread(_create_list_sync, name)

@@ -42,6 +42,27 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "create_google_task_list",
+            "description": (
+                "Create a new Google Tasks list. Use when the user asks to "
+                "make/start a new list (e.g. \"create a list called Travel\"). "
+                "After creating, you can immediately add tasks to it by name."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "Title of the new list (will be used as the list name).",
+                    },
+                },
+                "required": ["name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "escalate_to_smart_model",
             "description": (
                 "Hand the conversation off to a smarter, slower model. "
@@ -70,11 +91,17 @@ async def _add_google_task(
     return f"OK, added '{result['title']}'{where}."
 
 
+async def _create_google_task_list(name: str) -> str:
+    result = await google_tasks.create_task_list(name)
+    return f"Created list '{result['title']}'."
+
+
 async def _escalate(reason: str) -> str:
     return ESCALATE_SENTINEL
 
 
 TOOL_DISPATCH: dict[str, ToolFn] = {
     "add_google_task": _add_google_task,
+    "create_google_task_list": _create_google_task_list,
     "escalate_to_smart_model": _escalate,
 }
