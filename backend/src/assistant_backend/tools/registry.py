@@ -1,5 +1,6 @@
 from typing import Any, Awaitable, Callable
 
+from .. import actions
 from . import google_tasks
 
 ToolFn = Callable[..., Awaitable[str]]
@@ -63,6 +64,33 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "call_contact",
+            "description": (
+                "Place a phone call to one of the user's contacts. Use whenever "
+                "the user says things like \"call Mom\", \"phone John\", \"ring "
+                "Sarah\". The phone will fuzzy-match the name against the user's "
+                "address book and dial. The call is dispatched on the phone AFTER "
+                "you finish speaking your reply — so confirm in your reply (e.g. "
+                "\"Calling Mom now.\")."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": (
+                            "Contact name as the user said it. Pass it as-is — the "
+                            "phone handles the lookup and any fuzzy matching."
+                        ),
+                    },
+                },
+                "required": ["name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "escalate_to_smart_model",
             "description": (
                 "Hand the conversation off to a smarter, slower model. "
@@ -96,6 +124,11 @@ async def _create_google_task_list(name: str) -> str:
     return f"Created list '{result['title']}'."
 
 
+async def _call_contact(name: str) -> str:
+    actions.queue({"type": "call", "name": name})
+    return f"OK, dialing {name} now."
+
+
 async def _escalate(reason: str) -> str:
     return ESCALATE_SENTINEL
 
@@ -103,5 +136,6 @@ async def _escalate(reason: str) -> str:
 TOOL_DISPATCH: dict[str, ToolFn] = {
     "add_google_task": _add_google_task,
     "create_google_task_list": _create_google_task_list,
+    "call_contact": _call_contact,
     "escalate_to_smart_model": _escalate,
 }

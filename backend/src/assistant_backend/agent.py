@@ -2,6 +2,7 @@ import json
 import logging
 from typing import Any
 
+from . import actions
 from .config import settings
 from .openrouter import chat_completion
 from .tools import google_tasks
@@ -17,24 +18,43 @@ Rules:
 - Confirm completed actions briefly: "Done — added milk to your groceries list."
 - Don't ask clarifying questions for simple requests. Pick a sensible default and proceed.
 - The user may follow up across multiple turns. Keep context — don't re-ask things they already told you.
-- If something fails, say so in one sentence."""
+- If something fails, say so in one sentence.
+- For phone-side actions (calls, etc.), confirm the action in your reply; the phone executes it after you finish speaking."""
 
 MAX_TURNS = 8
 MAX_HISTORY_MESSAGES = 40
+MAX_NOTIFICATIONS_IN_PROMPT = 20
 
 
-def _build_system_prompt(list_names: list[str]) -> str:
-    if not list_names:
-        return BASE_SYSTEM_PROMPT
-    pretty = ", ".join(f'"{n}"' for n in list_names)
-    return (
-        BASE_SYSTEM_PROMPT
-        + "\n\nAvailable Google Tasks lists: "
-        + pretty
-        + ". When adding a task, match the user's wording (e.g. \"add to groceries\","
-          " \"work list\") to one of these names exactly and pass it as list_name."
-          " If they don't mention a list, omit list_name."
-    )
+def _build_system_prompt(
+    list_names: list[str],
+    notifications: list[dict[str, Any]],
+) -> str:
+    base = BASE_SYSTEM_PROMPT
+    if list_names:
+        pretty = ", ".join(f'"{n}"' for n in list_names)
+        base += (
+            "\n\nAvailable Google Tasks lists: "
+            + pretty
+            + ". When adding a task, match the user's wording (e.g. \"add to groceries\","
+              " \"work list\") to one of these names exactly and pass it as list_name."
+              " If they don't mention a list, omit list_name."
+        )
+    if notifications:
+        lines = []
+        for n in notifications[:MAX_NOTIFICATIONS_IN_PROMPT]:
+            app = str(n.get("app", "")).strip() or "?"
+            title = str(n.get("title", "")).strip()
+            text = str(n.get("text", "")).strip()
+            body = " — ".join(p for p in (title, text) if p) or "(no body)"
+            lines.append(f"- [{app}] {body}")
+        base += (
+            "\n\nRecent notifications on the user's phone (most recent first):\n"
+            + "\n".join(lines)
+            + "\n\nIf the user asks about notifications, messages, or what's new,"
+              " summarize from this list. Don't bring them up unprompted."
+        )
+    return base
 
 
 def _trim_history(history: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -50,7 +70,10 @@ def _trim_history(history: list[dict[str, Any]]) -> list[dict[str, Any]]:
 async def run_agent(
     transcript: str,
     history: list[dict[str, Any]] | None = None,
-) -> tuple[str, list[dict[str, Any]]]:
+    notifications: list[dict[str, Any]] | None = None,
+) -> tuple[str, list[dict[str, Any]], list[dict[str, Any]]]:
+    actions_list = actions.begin()
+
     if history:
         messages: list[dict[str, Any]] = list(history)
         if not any(m.get("role") == "system" for m in messages):
@@ -61,7 +84,10 @@ async def run_agent(
         except Exception:
             log.exception("failed to fetch task lists; continuing without them")
             lists = []
-        messages = [{"role": "system", "content": _build_system_prompt(lists)}]
+        messages = [{
+            "role": "system",
+            "content": _build_system_prompt(lists, notifications or []),
+        }]
     messages.append({"role": "user", "content": transcript})
 
     model = settings.fast_model
@@ -108,4 +134,4 @@ async def run_agent(
         final_reply = "Sorry, I got stuck. Try rephrasing."
         messages.append({"role": "assistant", "content": final_reply})
 
-    return final_reply, _trim_history(messages)
+    return final_reply, _trim_history(messages), actions_list
