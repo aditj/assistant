@@ -2,6 +2,8 @@
 <resources>
     <string name="app_name">Assistant</string>
     <string name="set_default_button">Set as default assistant</string>
+    <string name="notif_button">Grant notification access</string>
+    <string name="perms_button">Grant call + contacts permissions</string>
     <string name="test_button">Test backend (typed)</string>
-    <string name="instructions">Set this app as your default Digital Assistant, then long-press the power button (or use your gesture) to invoke.</string>
+    <string name="instructions">Long-press power to invoke. Grant access below if a feature isn\'t working.</string>
 </resources>

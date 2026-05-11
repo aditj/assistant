@@ -2,13 +2,17 @@ package com.aditjain.assistant
 
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.service.voice.VoiceInteractionSession
 import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
+import android.speech.tts.Voice
 import android.util.Log
 import android.view.LayoutInflater
 import android.view.View
@@ -16,83 +20,171 @@ import android.widget.TextView
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.cancel
+import kotlinx.coroutines.cancelChildren
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import okhttp3.MediaType.Companion.toMediaType
-import okhttp3.OkHttpClient
-import okhttp3.Request
-import okhttp3.RequestBody.Companion.toRequestBody
-import org.json.JSONObject
+import org.json.JSONArray
 import java.util.Locale
-import java.util.concurrent.TimeUnit
 
 private const val TAG = "AssistantSession"
+
+private const val SILENCE_DISMISS_MS = 6_000L
+private const val POST_TTS_GAP_MS = 300L
+
+private enum class Status(val label: String, val dotRes: Int) {
+    LISTENING("Listening…", R.drawable.dot_listening),
+    THINKING("Thinking…", R.drawable.dot_thinking),
+    SPEAKING("Speaking…", R.drawable.dot_speaking),
+}
 
 class AssistantSession(context: Context) : VoiceInteractionSession(context) {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+    private val mainHandler = Handler(Looper.getMainLooper())
+
     private var recognizer: SpeechRecognizer? = null
     private var tts: TextToSpeech? = null
+    private var ttsReady = false
+
+    private var statusView: TextView? = null
+    private var statusDot: View? = null
     private var transcriptView: TextView? = null
     private var replyView: TextView? = null
 
-    private val http = OkHttpClient.Builder()
-        .connectTimeout(10, TimeUnit.SECONDS)
-        .readTimeout(60, TimeUnit.SECONDS)
-        .build()
+    /** OpenAI-format conversation history persisted across turns within this session. */
+    private var conversation: JSONArray = JSONArray()
+
+    /** Phone-side actions queued by the most recent agent reply. Executed
+     *  after TTS finishes speaking. */
+    private var pendingActions: JSONArray = JSONArray()
+
+    /** True once the recognizer has delivered a result for the current
+     *  startListening call. Suppresses spurious onError(NO_MATCH). */
+    private var resultsReceived = false
+
+    private val silenceDismiss = Runnable {
+        Log.i(TAG, "silence timeout — closing session")
+        hide()
+    }
 
     override fun onCreateContentView(): View {
         val view = LayoutInflater.from(context).inflate(R.layout.session_overlay, null)
+        statusView = view.findViewById(R.id.status)
+        statusDot = view.findViewById(R.id.statusDot)
         transcriptView = view.findViewById(R.id.transcript)
         replyView = view.findViewById(R.id.reply)
+        view.findViewById<View>(R.id.root).setOnClickListener { hide() }
         return view
     }
 
     override fun onShow(args: Bundle?, showFlags: Int) {
         super.onShow(args, showFlags)
-        tts = TextToSpeech(context) { status ->
-            if (status == TextToSpeech.SUCCESS) {
-                tts?.language = Locale.US
-                tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
-                    override fun onStart(utteranceId: String?) {}
-                    override fun onError(utteranceId: String?) {}
-                    override fun onDone(utteranceId: String?) {
-                        // Close the session after the reply finishes speaking.
-                        scope.launch { hide() }
-                    }
-                })
-            }
-        }
+        tearDownIO()
+        conversation = JSONArray()
+        pendingActions = JSONArray()
+        transcriptView?.text = ""
+        replyView?.text = ""
+        initTts()
         startListening()
     }
 
+    private fun initTts() {
+        tts = TextToSpeech(context, { status ->
+            if (status == TextToSpeech.SUCCESS) {
+                configureTts()
+            } else {
+                Log.w(TAG, "Google TTS init failed ($status); falling back to default engine")
+                tts = TextToSpeech(context) { fallbackStatus ->
+                    if (fallbackStatus == TextToSpeech.SUCCESS) configureTts()
+                    else Log.e(TAG, "default TTS init failed status=$fallbackStatus")
+                }
+            }
+        }, "com.google.android.tts")
+    }
+
+    private fun configureTts() {
+        ttsReady = true
+        val t = tts ?: return
+        t.language = Locale.US
+        pickBestVoice()
+        t.setSpeechRate(1.0f)
+        t.setPitch(1.0f)
+        t.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
+            override fun onStart(utteranceId: String?) {
+                mainHandler.post { setStatus(Status.SPEAKING) }
+            }
+            override fun onError(utteranceId: String?) {}
+            override fun onDone(utteranceId: String?) {
+                mainHandler.postDelayed({ afterSpeak() }, POST_TTS_GAP_MS)
+            }
+        })
+        Log.i(TAG, "TTS engine=${t.defaultEngine} ready")
+    }
+
+    private fun setStatus(status: Status) {
+        statusView?.text = status.label
+        statusDot?.setBackgroundResource(status.dotRes)
+    }
+
+    private fun pickBestVoice() {
+        val t = tts ?: return
+        val voices: Set<Voice> = try { t.voices ?: emptySet() } catch (_: Exception) { emptySet() }
+        val best = voices
+            .filter { it.locale?.language == "en" }
+            .filterNot { it.features.orEmpty().contains(TextToSpeech.Engine.KEY_FEATURE_NOT_INSTALLED) }
+            .maxWithOrNull(
+                compareBy<Voice> { it.quality }
+                    .thenBy { if (it.isNetworkConnectionRequired) 0 else 1 }
+            )
+        if (best != null) {
+            Log.i(TAG, "TTS voice: ${best.name} quality=${best.quality} network=${best.isNetworkConnectionRequired}")
+            t.voice = best
+        } else {
+            Log.w(TAG, "no en voices found, sticking with default")
+        }
+    }
+
     private fun startListening() {
+        setStatus(Status.LISTENING)
+        resultsReceived = false
+        recognizer?.destroy()
         recognizer = SpeechRecognizer.createSpeechRecognizer(context).apply {
             setRecognitionListener(object : RecognitionListener {
+                override fun onReadyForSpeech(params: Bundle?) {
+                    mainHandler.postDelayed(silenceDismiss, SILENCE_DISMISS_MS)
+                }
+                override fun onBeginningOfSpeech() {
+                    mainHandler.removeCallbacks(silenceDismiss)
+                }
                 override fun onPartialResults(partialResults: Bundle) {
                     val text = partialResults
                         .getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
                         ?.firstOrNull()
                     if (!text.isNullOrEmpty()) transcriptView?.text = text
                 }
-
                 override fun onResults(results: Bundle) {
+                    mainHandler.removeCallbacks(silenceDismiss)
+                    resultsReceived = true
                     val text = results
                         .getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
                         ?.firstOrNull()
                         .orEmpty()
+                    if (text.isBlank()) {
+                        hide()
+                        return
+                    }
                     transcriptView?.text = text
-                    if (text.isNotBlank()) callAgent(text) else hide()
+                    callAgent(text)
                 }
-
                 override fun onError(error: Int) {
+                    if (resultsReceived) {
+                        Log.d(TAG, "ignoring stale STT error after results: $error")
+                        return
+                    }
+                    mainHandler.removeCallbacks(silenceDismiss)
                     Log.w(TAG, "STT error=$error")
-                    speak("Sorry, I didn't catch that.")
+                    hide()
                 }
-
-                override fun onReadyForSpeech(params: Bundle?) {}
-                override fun onBeginningOfSpeech() {}
                 override fun onRmsChanged(rmsdB: Float) {}
                 override fun onBufferReceived(buffer: ByteArray?) {}
                 override fun onEndOfSpeech() {}
@@ -110,44 +202,91 @@ class AssistantSession(context: Context) : VoiceInteractionSession(context) {
     }
 
     private fun callAgent(transcript: String) {
+        setStatus(Status.THINKING)
+        val notifications = NotificationStore.snapshot()
         scope.launch {
-            val reply = try {
+            val result = try {
                 withContext(Dispatchers.IO) {
-                    val body = JSONObject().put("transcript", transcript).toString()
-                        .toRequestBody("application/json".toMediaType())
-                    val req = Request.Builder()
-                        .url("${BuildConfig.BACKEND_URL}/agent")
-                        .header("X-API-Key", BuildConfig.API_KEY)
-                        .post(body)
-                        .build()
-                    http.newCall(req).execute().use { resp ->
-                        val raw = resp.body?.string().orEmpty()
-                        if (!resp.isSuccessful) {
-                            "Backend error ${resp.code}: ${raw.take(120)}"
-                        } else {
-                            JSONObject(raw).optString("reply").ifBlank { "(empty reply)" }
-                        }
-                    }
+                    Backend.callAgent(transcript, conversation, notifications)
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "agent call failed", e)
-                "Couldn't reach backend: ${e.message}"
+                Backend.Result(
+                    reply = "Couldn't reach backend: ${e.message}",
+                    history = conversation,
+                    actions = JSONArray(),
+                )
             }
-            replyView?.text = reply
-            speak(reply)
+            conversation = result.history
+            pendingActions = result.actions
+            replyView?.text = result.reply
+            speak(result.reply)
         }
     }
 
     private fun speak(text: String) {
+        if (!ttsReady) {
+            mainHandler.postDelayed({ afterSpeak() }, 200)
+            return
+        }
         tts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, "utt-${System.currentTimeMillis()}")
+    }
+
+    /** Called once TTS has finished its current utterance. Either runs queued
+     *  phone-side actions or resumes listening for a follow-up. */
+    private fun afterSpeak() {
+        if (pendingActions.length() > 0) {
+            executePendingActions()
+        } else {
+            startListening()
+        }
+    }
+
+    private fun executePendingActions() {
+        val actions = pendingActions
+        pendingActions = JSONArray()
+        for (i in 0 until actions.length()) {
+            val a = actions.optJSONObject(i) ?: continue
+            when (a.optString("type")) {
+                "call" -> handleCallAction(a.optString("name"))
+                else -> Log.w(TAG, "unknown action type=${a.optString("type")}")
+            }
+        }
+    }
+
+    private fun handleCallAction(name: String) {
+        val match = Contacts.findPhone(context, name)
+        if (match == null) {
+            Log.w(TAG, "no contact for '$name'")
+            speak("I couldn't find $name in your contacts.")
+            return
+        }
+        Log.i(TAG, "dialing ${match.displayName} at ${match.number} (matches=${match.totalMatches})")
+        val intent = Intent(Intent.ACTION_CALL, Uri.parse("tel:${match.number}")).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        try {
+            context.startActivity(intent)
+            hide()
+        } catch (e: SecurityException) {
+            Log.e(TAG, "CALL_PHONE missing", e)
+            speak("I don't have permission to make calls — grant it in the app.")
+        } catch (e: Exception) {
+            Log.e(TAG, "call dispatch failed", e)
+            speak("Couldn't dial.")
+        }
+    }
+
+    private fun tearDownIO() {
+        mainHandler.removeCallbacks(silenceDismiss)
+        recognizer?.destroy(); recognizer = null
+        tts?.stop(); tts?.shutdown(); tts = null
+        ttsReady = false
     }
 
     override fun onHide() {
         super.onHide()
-        recognizer?.destroy()
-        recognizer = null
-        tts?.shutdown()
-        tts = null
-        scope.cancel()
+        tearDownIO()
+        scope.coroutineContext.cancelChildren()
     }
 }

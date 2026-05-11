@@ -1,25 +1,68 @@
 <?xml version="1.0" encoding="utf-8"?>
-<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/root"
     android:layout_width="match_parent"
-    android:layout_height="wrap_content"
-    android:orientation="vertical"
-    android:padding="24dp"
-    android:background="#CC000000">
+    android:layout_height="match_parent"
+    android:background="#E6101418"
+    android:clickable="true"
+    android:focusable="true">
 
-    <TextView
-        android:id="@+id/transcript"
+    <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:textColor="#FFFFFF"
-        android:textSize="18sp"
-        android:hint="Listening…"
-        android:textColorHint="#888888" />
+        android:layout_gravity="bottom"
+        android:orientation="vertical"
+        android:padding="32dp">
 
-    <TextView
-        android:id="@+id/reply"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:textColor="#A0E0FF"
-        android:textSize="16sp"
-        android:layout_marginTop="12dp" />
-</LinearLayout>
+        <LinearLayout
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:layout_marginBottom="20dp">
+
+            <View
+                android:id="@+id/statusDot"
+                android:layout_width="10dp"
+                android:layout_height="10dp"
+                android:background="@drawable/dot_listening"
+                android:layout_marginEnd="10dp" />
+
+            <TextView
+                android:id="@+id/status"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Listening…"
+                android:textColor="#9CA3AF"
+                android:textSize="14sp"
+                android:letterSpacing="0.05"
+                android:textAllCaps="true" />
+        </LinearLayout>
+
+        <TextView
+            android:id="@+id/transcript"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:textColor="#FFFFFF"
+            android:textSize="30sp"
+            android:lineSpacingMultiplier="1.15"
+            android:layout_marginBottom="18dp" />
+
+        <TextView
+            android:id="@+id/reply"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:textColor="#9BCEFF"
+            android:textSize="22sp"
+            android:lineSpacingMultiplier="1.2" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="end"
+            android:text="tap anywhere to dismiss"
+            android:textColor="#4B5563"
+            android:textSize="11sp"
+            android:layout_marginTop="20dp" />
+    </LinearLayout>
+</FrameLayout>

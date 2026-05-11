@@ -1,7 +1,7 @@
 package com.aditjain.assistant
 
 import android.Manifest
-import android.app.role.RoleManager
+import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Bundle
@@ -19,29 +19,31 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import okhttp3.MediaType.Companion.toMediaType
-import okhttp3.OkHttpClient
-import okhttp3.Request
-import okhttp3.RequestBody.Companion.toRequestBody
-import org.json.JSONObject
-import java.util.concurrent.TimeUnit
+import org.json.JSONArray
 
 class MainActivity : AppCompatActivity() {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
-    private val http = OkHttpClient.Builder()
-        .connectTimeout(10, TimeUnit.SECONDS)
-        .readTimeout(60, TimeUnit.SECONDS)
-        .build()
 
-    private val roleLauncher = registerForActivityResult(
+    private val activityLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
-    ) { /* No-op — user picked or canceled. */ }
+    ) { /* No-op. */ }
 
     private val micLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { granted ->
         if (!granted) Toast.makeText(this, "Mic permission required", Toast.LENGTH_SHORT).show()
+    }
+
+    private val multiPermsLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { result ->
+        val denied = result.filter { !it.value }.keys
+        if (denied.isNotEmpty()) {
+            Toast.makeText(this, "Denied: ${denied.joinToString()}", Toast.LENGTH_LONG).show()
+        } else {
+            Toast.makeText(this, "Permissions granted", Toast.LENGTH_SHORT).show()
+        }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -55,16 +57,36 @@ class MainActivity : AppCompatActivity() {
         }
 
         findViewById<Button>(R.id.setDefaultButton).setOnClickListener { openAssistantPicker() }
+        findViewById<Button>(R.id.notifAccessButton).setOnClickListener { openNotificationAccess() }
+        findViewById<Button>(R.id.permsButton).setOnClickListener { requestCallAndContacts() }
         findViewById<Button>(R.id.testButton).setOnClickListener { testBackend() }
     }
 
     private fun openAssistantPicker() {
-        val rm = getSystemService(RoleManager::class.java)
-        if (rm != null && rm.isRoleAvailable(RoleManager.ROLE_ASSISTANT)) {
-            roleLauncher.launch(rm.createRequestRoleIntent(RoleManager.ROLE_ASSISTANT))
-            return
+        Toast.makeText(this, "Tap 'Digital assistant app' → pick Assistant", Toast.LENGTH_LONG).show()
+        val candidates = listOf(
+            Intent(Settings.ACTION_MANAGE_DEFAULT_APPS_SETTINGS),
+            Intent(Settings.ACTION_VOICE_INPUT_SETTINGS),
+            Intent(Settings.ACTION_SETTINGS),
+        )
+        for (intent in candidates) {
+            try {
+                activityLauncher.launch(intent)
+                return
+            } catch (_: ActivityNotFoundException) { /* try next */ }
         }
-        roleLauncher.launch(Intent(Settings.ACTION_VOICE_INPUT_SETTINGS))
+    }
+
+    private fun openNotificationAccess() {
+        Toast.makeText(this, "Find 'Assistant' and toggle it ON", Toast.LENGTH_LONG).show()
+        activityLauncher.launch(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
+    }
+
+    private fun requestCallAndContacts() {
+        multiPermsLauncher.launch(arrayOf(
+            Manifest.permission.READ_CONTACTS,
+            Manifest.permission.CALL_PHONE,
+        ))
     }
 
     private fun testBackend() {
@@ -78,21 +100,7 @@ class MainActivity : AppCompatActivity() {
         scope.launch {
             val reply = try {
                 withContext(Dispatchers.IO) {
-                    val body = JSONObject().put("transcript", transcript).toString()
-                        .toRequestBody("application/json".toMediaType())
-                    val req = Request.Builder()
-                        .url("${BuildConfig.BACKEND_URL}/agent")
-                        .header("X-API-Key", BuildConfig.API_KEY)
-                        .post(body)
-                        .build()
-                    http.newCall(req).execute().use { resp ->
-                        val raw = resp.body?.string().orEmpty()
-                        if (resp.isSuccessful) {
-                            JSONObject(raw).optString("reply")
-                        } else {
-                            "HTTP ${resp.code}: ${raw.take(200)}"
-                        }
-                    }
+                    Backend.callAgent(transcript, JSONArray()).reply
                 }
             } catch (e: Exception) {
                 "error: ${e.message}"
